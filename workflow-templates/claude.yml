@@ -1,0 +1,25 @@
+# Lets @claude answer and push fixes on issues and PRs in this repo.
+# The logic lives in testingbot/.github; this file only forwards the events.
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    # A called workflow can only narrow these, never widen them.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: testingbot/.github/.github/workflows/claude.yml@main
+    secrets: inherit

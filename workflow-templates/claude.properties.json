@@ -1,0 +1,5 @@
+{
+  "name": "Claude Code",
+  "description": "Mention @claude in an issue, PR comment or review to have Claude answer or push changes.",
+  "categories": ["Automation"]
+}

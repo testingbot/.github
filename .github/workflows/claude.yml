@@ -1,0 +1,42 @@
+# Reusable Claude Code workflow for every testingbot repo.
+#
+# Repos do not copy this file: they carry the stub from
+# workflow-templates/claude.yml, which calls this one. Change behaviour
+# (model, tools, timeouts) here and every repo picks it up.
+#
+# Needs, once per org: the Claude GitHub App installed on the repo and the
+# ANTHROPIC_API_KEY organization secret shared with it.
+name: Claude Code (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  claude:
+    # Only comments, reviews and issues that mention @claude. The action itself
+    # also ignores anyone without write access to the repo.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # One run per PR/issue at a time, so two quick comments do not push over each other.
+    concurrency:
+      group: claude-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --max-turns 40
