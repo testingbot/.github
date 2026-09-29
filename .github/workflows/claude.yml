@@ -40,3 +40,92 @@ jobs:
             actions: read
           claude_args: |
             --max-turns 40
+
+  # Works through a Copilot review without anyone mentioning @claude: fixes the
+  # comments that hold up, replies on every thread, resolves the fixed ones.
+  # Keyed on the review rather than its comments, so one review is one run.
+  copilot-review:
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: claude-copilot-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      # Copilot reviews every push, and every fix Claude pushes is a push: stop
+      # after three rounds and leave the rest to a person. Also skip reviews
+      # that left nothing open.
+      - name: Check rounds and open threads
+        id: gate
+        run: |
+          # shellcheck disable=SC2016 # $owner etc. are GraphQL variables
+          rounds=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+            --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .id' | wc -l)
+          open=$(gh api graphql -F owner="${REPO%/*}" -F name="${REPO#*/}" -F pr="$PR" -f query='
+            query($owner: String!, $name: String!, $pr: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $pr) {
+                  reviewThreads(first: 100) {
+                    nodes { isResolved comments(first: 1) { nodes { author { login } } } }
+                  }
+                }
+              }
+            }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+              | select(.isResolved | not)
+              | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")] | length')
+          echo "Copilot review rounds: $rounds, unresolved Copilot threads: $open"
+          if [ "$rounds" -gt 3 ] || [ "$open" -eq 0 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - if: steps.gate.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_bots: 'copilot-pull-request-reviewer[bot],Copilot'
+          additional_permissions: |
+            actions: read
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            BRANCH: ${{ github.event.pull_request.head.ref }} (checked out in the working directory)
+
+            GitHub Copilot just reviewed this pull request. Work through every
+            unresolved review thread started by copilot-pull-request-reviewer.
+            List them with `gh api graphql` (pullRequest.reviewThreads: id,
+            isResolved, path, line, comments).
+
+            For each thread, read the code it points at and decide whether the
+            comment is right. Copilot is often right and sometimes wrong; do not
+            change code just to make a comment go away.
+
+            - Valid: fix it in the smallest change that matches the surrounding
+              code. Run the project's tests and linter if it has them, and do not
+              push a change that breaks them.
+            - Not valid, or not worth the change: leave the code alone.
+
+            Commit the fixes (one commit is fine, message says it addresses the
+            Copilot review) and `git push` to BRANCH. Never force-push, never push
+            to any other branch, never merge the PR.
+
+            Then reply on every thread with `gh api graphql`
+            (addPullRequestReviewThreadReply): for a fix, what changed and the
+            commit SHA; for a decline, why. Resolve (resolveReviewThread) only
+            the threads you fixed; leave declined ones open for a person. Keep
+            replies short and do not write "@claude" in them.
+          claude_args: |
+            --max-turns 60
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh api:*),Bash(npm:*),Bash(npx:*),Bash(node:*),Bash(bundle:*),Bash(ruby:*),Bash(make:*),Bash(python3:*),Bash(pip:*),Bash(go:*),Bash(cargo:*)"
