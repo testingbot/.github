@@ -1,4 +1,5 @@
-# Lets @claude answer and push fixes on issues and PRs in this repo.
+# Lets @claude answer and push fixes on issues and PRs in this repo, and has
+# Claude review every PR automatically (approve, request changes or comment).
 # The logic lives in testingbot/.github; this file only forwards the events.
 name: Claude Code
 
@@ -11,6 +12,8 @@ on:
     types: [submitted]
   issues:
     types: [opened, assigned]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   claude:
@@ -22,4 +25,15 @@ jobs:
       id-token: write
       actions: read
     uses: testingbot/.github/.github/workflows/claude.yml@main
+    secrets: inherit
+
+  review:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      checks: read
+      actions: read
+    uses: testingbot/.github/.github/workflows/claude-review.yml@main
     secrets: inherit
