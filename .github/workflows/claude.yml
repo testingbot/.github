@@ -38,5 +38,18 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           additional_permissions: |
             actions: read
+          # Reviews: `gh pr review` lets Claude submit a real review - approve,
+          # request changes, or comment - instead of only a PR comment. It is
+          # added to the tools the action allows in tag mode, not a replacement
+          # for them. The rules for when it may approve are in the appended
+          # system prompt, because the tool cannot express them.
+          #
+          # An approval here does not gate anything on its own: no testingbot
+          # ruleset requires approvals today (testingbot/web develop: 0). If one
+          # ever does, decide first whether a bot approval should count, since
+          # Claude cannot tell a PR it wrote through Claude Code on a person's
+          # account from one that person wrote.
           claude_args: |
             --max-turns 40
+            --allowedTools "Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --append-system-prompt "Submitting PR reviews: you may run gh pr review with --approve, --request-changes or --comment, but ONLY when the comment that invoked you asks for a review or an approval; otherwise answer as usual and submit no review. Before approving, read the full diff (gh pr diff) and the PR's CI state. Approve only when you found nothing blocking and every check has completed and passed - if checks are still running, use --comment and say approval waits on CI; if anything is blocking, use --request-changes and say exactly what. NEVER approve a PR whose author is a bot (login ending in [bot]) or a PR containing commits you pushed in an earlier run - that is reviewing your own work; use --comment instead and say why. State in the review body what you checked, and that it is an automated review."
