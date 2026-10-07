@@ -44,7 +44,14 @@ jobs:
       # own check is excluded by workflow name, or it would wait on itself.
       # Gives up after 30 minutes and lets Claude see whatever state is left;
       # the prompt forbids approving with checks unfinished.
+      #
+      # It also hands Claude the final check results. Claude cannot read them
+      # itself: the action swaps in the Claude GitHub App's token, which has no
+      # Checks permission, so `gh pr checks` there fails with "Resource not
+      # accessible by integration" (testingbot/vm#85). This step runs on the
+      # workflow's own token, which the stub grants checks: read.
       - name: Wait for the PR's other checks
+        id: ci
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -60,6 +67,14 @@ jobs:
             echo "$pending check(s) still running"
             sleep 30
           done
+          # One "name: state" line per check, this workflow's own excluded.
+          {
+            echo 'summary<<CHECKS_EOF'
+            gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --json name,state,workflow \
+              --jq ".[] | select(.workflow != \"$SELF\") | \"\(.name): \(.state)\"" 2>&1 ||
+              echo "could not read checks"
+            echo 'CHECKS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -76,12 +91,15 @@ jobs:
             loss, and changes that break existing callers. Do not raise style
             nits that a linter would catch.
 
-            Then check CI with `gh pr checks`.
+            CI results for the head commit, read just before this run (you
+            cannot query them yourself; `gh pr checks` is not available to
+            you). SUCCESS, SKIPPED and NEUTRAL count as passed:
+            ${{ steps.ci.outputs.summary }}
 
             Submit exactly ONE review with `gh pr review`:
             - `--approve` only if you found nothing blocking AND every check
-              has completed and passed (skipped is fine; ignore the
-              "Claude review" check itself, which is this run).
+              listed above has passed. An empty list means the repo has no
+              other checks, which is fine.
             - `--request-changes` if you found anything blocking. Say exactly
               what and where; put line-specific findings in inline comments with
               mcp__github_inline_comment__create_inline_comment (confirmed: true).
@@ -93,4 +111,4 @@ jobs:
             what you checked. Keep it short: findings first, no praise.
           claude_args: |
             --max-turns 30
-            --allowedTools "Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"
