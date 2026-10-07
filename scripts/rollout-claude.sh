@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Opens a PR adding the Claude Code stub (workflow-templates/claude.yml) to
-# every repo in the org that does not have it yet.
+# every repo in the org that does not have it yet - or, with UPDATE=1, a PR
+# replacing it in every repo whose copy differs from the template.
 #
 #   scripts/rollout-claude.sh                 dry run: list what would happen
 #   scripts/rollout-claude.sh --apply         open the PRs
 #   scripts/rollout-claude.sh --apply vm hub  only these repos
+#   UPDATE=1 scripts/rollout-claude.sh        dry run of an update rollout
 #
 # VISIBILITY="private internal public" widens the set; by default the public
 # sample repos are left alone, since anyone can comment there.
@@ -14,7 +16,12 @@
 set -euo pipefail
 
 ORG=${ORG:-testingbot}
-BRANCH=${BRANCH:-add-claude-code-workflow}
+UPDATE=${UPDATE:-}
+if [ -n "$UPDATE" ]; then
+	BRANCH=${BRANCH:-update-claude-code-workflow}
+else
+	BRANCH=${BRANCH:-add-claude-code-workflow}
+fi
 VISIBILITY=${VISIBILITY:-private internal}
 TARGET=.github/workflows/claude.yml
 STUB="$(cd "$(dirname "$0")/.." && pwd)/workflow-templates/claude.yml"
@@ -54,9 +61,21 @@ while read -r repo default; do
 	[ "$repo" = ".github" ] && continue
 	base=$(base_for "$repo" "$default")
 
-	if gh api "repos/$ORG/$repo/contents/$TARGET?ref=$base" --silent 2>/dev/null; then
+	# The existing file's blob sha, or empty when the repo has none.
+	existing=$(gh api "repos/$ORG/$repo/contents/$TARGET?ref=$base" --jq .sha 2>/dev/null || true)
+	if [ -z "$UPDATE" ] && [ -n "$existing" ]; then
 		echo "skip   $repo: already has $TARGET on $base"
 		continue
+	fi
+	if [ -n "$UPDATE" ]; then
+		if [ -z "$existing" ]; then
+			echo "skip   $repo: no $TARGET on $base (run without UPDATE to add one)"
+			continue
+		fi
+		if [ "$existing" = "$(git hash-object "$STUB")" ]; then
+			echo "skip   $repo: $TARGET on $base already matches the template"
+			continue
+		fi
 	fi
 	if [ -n "$(gh pr list -R "$ORG/$repo" --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
 		echo "skip   $repo: PR from $BRANCH already open"
@@ -69,6 +88,20 @@ while read -r repo default; do
 
 	sha=$(gh api "repos/$ORG/$repo/git/ref/heads/$base" --jq .object.sha)
 	gh api -X POST "repos/$ORG/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent
+	if [ -n "$UPDATE" ]; then
+		gh api -X PUT "repos/$ORG/$repo/contents/$TARGET" \
+			-f message="ci: update the Claude Code workflow stub from $ORG/.github" \
+			-f content="$content" -f sha="$existing" -f branch="$BRANCH" --silent
+		url=$(gh pr create -R "$ORG/$repo" --base "$base" --head "$BRANCH" \
+			--title "ci: update the Claude Code workflow" \
+			--body "Replaces $TARGET with the current stub from $ORG/.github (workflow-templates/claude.yml).
+
+This version adds automatic PR review: on every non-draft PR from this repo, Claude waits for the other checks, then approves when it finds nothing blocking and CI is green, requests changes when it finds something blocking, and otherwise comments. @claude mentions work as before.
+
+This PR is the first one reviewed that way, since pull_request workflows run from the PR's own branch.")
+		echo "opened $repo: $url"
+		continue
+	fi
 	gh api -X PUT "repos/$ORG/$repo/contents/$TARGET" \
 		-f message="ci: let @claude answer and push fixes on issues and PRs" \
 		-f content="$content" -f branch="$BRANCH" --silent
