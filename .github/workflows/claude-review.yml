@@ -1,5 +1,14 @@
 # Reusable automatic PR review for every testingbot repo.
 #
+# SWITCHED OFF (2026-10-07). Automatic approvals come from Copilot code review
+# instead (org/repo Settings -> Copilot -> Code review -> Approvals), and
+# Claude reviews only when asked with @claude (claude.yml). The job below is
+# kept, gated by `false`, because all 60 repo stubs still call this file: a
+# missing file would fail a check on every PR in every repo. To turn it back
+# on, delete `false &&` from the job's `if:`. To remove it for good, roll the
+# stub out without the review job first (scripts/rollout-claude.sh UPDATE=1),
+# then delete this file.
+#
 # Repos call this from the stub in workflow-templates/claude.yml on
 # pull_request events. Claude reads the diff once the PR's other checks have
 # finished, then submits ONE review: approve, request changes, or comment.
@@ -25,6 +34,7 @@ jobs:
     #     not one to approve on Claude's word anyway;
     #   forks - fork PRs get no secrets either (only public repos have them).
     if: |
+      false &&
       !github.event.pull_request.draft &&
       !endsWith(github.event.pull_request.user.login, '[bot]') &&
       github.event.pull_request.head.repo.full_name == github.repository
